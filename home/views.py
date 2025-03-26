@@ -6,12 +6,10 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.pagination import PageNumberPagination
 from rest_framework_simplejwt.authentication import JWTAuthentication
-# import logging
 from .models import Blog, Comment
 from .serializers import BlogSerializer, CommentSerializer
 from collections import defaultdict
 
-# logger = logging.getLogger(__name__)
 
 class BlogPagination(PageNumberPagination):
     page_size = 5
