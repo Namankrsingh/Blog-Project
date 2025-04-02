@@ -27,3 +27,18 @@ class Comment(BaseModel):
     def __str__(self):
         return f"{self.user_id.username} - {self.comment_text[:20]}"
 
+class BlogLike(BaseModel):  
+    user_id = models.ForeignKey(User, on_delete=models.CASCADE, related_name="blog_likes")
+    blog_id = models.ForeignKey(Blog, on_delete=models.CASCADE, related_name="likes")  
+    like_status = models.IntegerField(default=0)  
+
+    class Meta:
+        unique_together = ("user_id", "blog_id")
+
+class CommentLike(BaseModel):  
+    user_id = models.ForeignKey(User, on_delete=models.CASCADE, related_name="comment_likes")
+    comment_id = models.ForeignKey(Comment, on_delete=models.CASCADE, related_name="likes")  
+    like_status = models.IntegerField(default=0)  
+
+    class Meta:
+        unique_together = ("user_id", "comment_id")

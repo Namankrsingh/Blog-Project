@@ -1,4 +1,4 @@
-from django.db.models import Q
+from django.db.models import Q, Count
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.views import APIView
@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.pagination import PageNumberPagination
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from .models import Blog, Comment
+from .models import Blog, Comment, BlogLike, CommentLike
 from .serializers import BlogSerializer, CommentSerializer
 from collections import defaultdict
 
@@ -16,12 +16,41 @@ class BlogPagination(PageNumberPagination):
     page_size_query_param = 'page_size'
     max_page_size = 50
 
+class BlogLikeView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        blog = get_object_or_404(Blog, uid=request.data.get('blog_id'))
+        blog_like, created = BlogLike.objects.get_or_create(user_id=request.user, blog_id=blog)
+        if not created:
+            blog_like.like_status = 1 if blog_like.like_status == 0 else 0
+            blog_like.save()
+        
+        return Response({'message': 'Blog like status updated'}, status=status.HTTP_200_OK)
+
+class CommentLikeView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        comment = get_object_or_404(Comment, uid=request.data.get('comment_id'))
+        comment_like, created = CommentLike.objects.get_or_create(user_id=request.user, comment_id=comment)
+        if not created:
+            comment_like.like_status = 1 if comment_like.like_status == 0 else 0
+            comment_like.save()
+        
+        return Response({'message': 'Comment like status updated'}, status=status.HTTP_200_OK)
+
 class PublicBlogView(APIView):
     pagination_class = BlogPagination
     permission_classes = [AllowAny]
 
     def get(self, request):
-        blogs = Blog.objects.all()
+        blogs = Blog.objects.all().annotate(
+            total_likes=Count('likes', filter=Q(likes__like_status=1)),
+            total_dislikes=Count('likes', filter=Q(likes__like_status=-1))
+        )
         search_query = request.GET.get('search')
         if search_query:
             blogs = blogs.filter(Q(title__icontains=search_query) | Q(blog_text__icontains=search_query))
@@ -38,7 +67,10 @@ class BlogView(APIView):
     pagination_class = BlogPagination
 
     def get(self, request):
-        blogs = Blog.objects.filter(user_id=request.user).select_related("user_id")
+        blogs = Blog.objects.filter(user_id=request.user).select_related("user_id").annotate(
+            total_likes=Count('likes', filter=Q(likes__like_status=1)),
+            total_dislikes=Count('likes', filter=Q(likes__like_status=-1))
+        )
         search_query = request.GET.get('search')
         if search_query:
             blogs = blogs.filter(Q(title__icontains=search_query) | Q(blog_text__icontains=search_query))
@@ -84,9 +116,12 @@ class AllCommentsView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [AllowAny]
     def get(self, request):
-        comments = Comment.objects.values(
-            "uid", "blog_id", "blog_id__title","created_at", "comment_text", 
-            "user_id", "user_id__username"
+        comments = Comment.objects.annotate(
+            total_likes=Count('likes', filter=Q(likes__like_status=1)),
+            total_dislikes=Count('likes', filter=Q(likes__like_status=-1))
+        ).values(
+            "uid", "blog_id", "blog_id__title", "created_at", "comment_text",
+            "user_id", "user_id__username", "total_likes", "total_dislikes"
         )
         grouped_comments = defaultdict(list)
         for comment in comments:
@@ -94,13 +129,16 @@ class AllCommentsView(APIView):
                 "uid": comment["uid"],
                 "blog_id": comment["blog_id"],
                 "created_at": comment["created_at"],
-                "comment_text": comment["comment_text"]
+                "comment_text": comment["comment_text"],
+                "likes": comment["total_likes"],
+                "dislikes": comment["total_dislikes"]
             })
+
         response_data = [
             {
                 "user_id": user_id,
                 "title": comment["blog_id__title"],
-                "commented_by": comments.filter(user_id=user_id).first()["user_id__username"],  
+                "commented_by": comments.filter(user_id=user_id).first()["user_id__username"],
                 "comments": user_comments
             }
             for user_id, user_comments in grouped_comments.items()
@@ -110,32 +148,39 @@ class CommentView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     def get(self, request):
-        comments = Comment.objects.filter(user_id=request.user.id).values(
-            "uid", 
-            "blog_id", 
-            "blog_id__title", 
-            "created_at", 
-            "comment_text", 
-            "user_id"
+        # Fetch comments made by the authenticated user
+        comments = Comment.objects.filter(user_id=request.user.id).annotate(
+            total_likes=Count('likes', filter=Q(likes__like_status=1)),
+            total_dislikes=Count('likes', filter=Q(likes__like_status=-1))
+        ).values(
+            "uid", "blog_id", "blog_id__title", "created_at", "comment_text",
+            "user_id", "user_id__username", "total_likes", "total_dislikes"
         )
-        user = request.user  
+
+        user = request.user  # Get the authenticated user
+        
+        # Group comments under their respective blog titles
         grouped_comments = defaultdict(list)
         for comment in comments:
-            grouped_comments[comment["user_id"]].append({
+            grouped_comments[comment["blog_id__title"]].append({
                 "uid": comment["uid"],
-                "blog_id": comment["blog_id"],
                 "created_at": comment["created_at"],
-                "comment_text": comment["comment_text"]
+                "comment_text": comment["comment_text"],
+                "likes": comment["total_likes"],
+                "dislikes": comment["total_dislikes"]
             })
+
+        # Structuring response data
         response_data = [
             {
-                "user_id": user_id,
-                "title": comment["blog_id__title"],
-                "commented_by": user.username, 
-                "comments": user_comments
+                "user_id": user.id,  # Authenticated user ID
+                "title": blog_title,
+                "commented_by": user.username,  # Authenticated username
+                "comments": comments_list
             }
-            for user_id, user_comments in grouped_comments.items()
-          ]
+            for blog_title, comments_list in grouped_comments.items()
+        ]
+
         return Response({'data': response_data, 'message': 'Your comments retrieved successfully'}, status=status.HTTP_200_OK)
     def post(self, request):
         blog = get_object_or_404(Blog, uid=request.data.get('blog_id'))
@@ -144,7 +189,7 @@ class CommentView(APIView):
             serializer.save(user_id=request.user, blog_id=blog)
             return Response({'data': serializer.data, 'message': 'Comment added successfully'}, status=status.HTTP_201_CREATED)
         return Response({'message': 'Invalid data', 'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
-    
+
     def patch(self, request):
         comment = get_object_or_404(Comment, uid=request.data.get('comment_id')) 
         if request.user != comment.user_id:
