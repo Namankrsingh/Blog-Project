@@ -47,10 +47,10 @@ class PublicBlogView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        blogs = Blog.objects.all().annotate(
-            total_likes=Count('likes', filter=Q(likes__like_status=1)),
-            total_dislikes=Count('likes', filter=Q(likes__like_status=-1))
+        blogs = Blog.objects.prefetch_related('comments').annotate(
+            total_likes=Count('likes', filter=Q(likes__like_status=1))
         )
+        
         search_query = request.GET.get('search')
         if search_query:
             blogs = blogs.filter(Q(title__icontains=search_query) | Q(blog_text__icontains=search_query))
@@ -60,21 +60,18 @@ class PublicBlogView(APIView):
         serializer = BlogSerializer(paginated_blogs, many=True)
         return paginator.get_paginated_response(serializer.data)
 
-
 class BlogView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     pagination_class = BlogPagination
 
     def get(self, request):
-        blogs = Blog.objects.filter(user_id=request.user).select_related("user_id").annotate(
-            total_likes=Count('likes', filter=Q(likes__like_status=1)),
-            total_dislikes=Count('likes', filter=Q(likes__like_status=-1))
+        blogs = Blog.objects.filter(user_id=request.user).prefetch_related('comments').annotate(
+            total_likes=Count('likes', filter=Q(likes__like_status=1))
         )
         search_query = request.GET.get('search')
         if search_query:
             blogs = blogs.filter(Q(title__icontains=search_query) | Q(blog_text__icontains=search_query))
-        
         paginator = self.pagination_class()
         paginated_blogs = paginator.paginate_queryset(blogs, request)
         serializer = BlogSerializer(paginated_blogs, many=True)
@@ -117,11 +114,10 @@ class AllCommentsView(APIView):
     permission_classes = [AllowAny]
     def get(self, request):
         comments = Comment.objects.annotate(
-            total_likes=Count('likes', filter=Q(likes__like_status=1)),
-            total_dislikes=Count('likes', filter=Q(likes__like_status=-1))
+            total_likes=Count('likes', filter=Q(likes__like_status=1))
         ).values(
             "uid", "blog_id", "blog_id__title", "created_at", "comment_text",
-            "user_id", "user_id__username", "total_likes", "total_dislikes"
+            "user_id", "user_id__username", "total_likes"
         )
         grouped_comments = defaultdict(list)
         for comment in comments:
@@ -130,8 +126,7 @@ class AllCommentsView(APIView):
                 "blog_id": comment["blog_id"],
                 "created_at": comment["created_at"],
                 "comment_text": comment["comment_text"],
-                "likes": comment["total_likes"],
-                "dislikes": comment["total_dislikes"]
+                "likes": comment["total_likes"]
             })
 
         response_data = [
@@ -150,32 +145,26 @@ class CommentView(APIView):
     def get(self, request):
         # Fetch comments made by the authenticated user
         comments = Comment.objects.filter(user_id=request.user.id).annotate(
-            total_likes=Count('likes', filter=Q(likes__like_status=1)),
-            total_dislikes=Count('likes', filter=Q(likes__like_status=-1))
+            total_likes=Count('likes', filter=Q(likes__like_status=1))
         ).values(
             "uid", "blog_id", "blog_id__title", "created_at", "comment_text",
-            "user_id", "user_id__username", "total_likes", "total_dislikes"
+            "user_id", "user_id__username", "total_likes"
         )
 
-        user = request.user  # Get the authenticated user
-        
-        # Group comments under their respective blog titles
+        user = request.user  
         grouped_comments = defaultdict(list)
         for comment in comments:
             grouped_comments[comment["blog_id__title"]].append({
                 "uid": comment["uid"],
                 "created_at": comment["created_at"],
                 "comment_text": comment["comment_text"],
-                "likes": comment["total_likes"],
-                "dislikes": comment["total_dislikes"]
+                "likes": comment["total_likes"]
             })
-
-        # Structuring response data
         response_data = [
             {
-                "user_id": user.id,  # Authenticated user ID
+                "user_id": user.id,  
                 "title": blog_title,
-                "commented_by": user.username,  # Authenticated username
+                "commented_by": user.username,  
                 "comments": comments_list
             }
             for blog_title, comments_list in grouped_comments.items()
