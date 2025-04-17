@@ -2,3 +2,7 @@ Allow all persons to see the all users comments and also show the username or ce
 Only Register user can see their own comments by using UID and 
 only Register user UID have access to edite their comments not any other register user can edite the comments.
 Add username or created_by in the Response part of a comment which uniquely show the whose comment is this.
+
+
+User Name:- virat123, rohit123, jasprit123, shubman123
+Password:- password123
